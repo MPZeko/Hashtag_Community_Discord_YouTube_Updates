@@ -91,3 +91,5 @@ Check the Google Cloud API key settings:
 - Verify the secret value is the raw API key string (no quotes/spaces).
 
 The script now prints the exact YouTube API error reason in logs to help diagnose this.
+
+- If error mentions `Discord webhook HTTP 401/403/404`, the webhook URL/permissions are invalid; recreate webhook in the target Discord channel and update `DISCORD_WEBHOOK_URL`.

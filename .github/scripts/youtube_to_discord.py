@@ -215,9 +215,13 @@ def post_to_discord(webhook_url: str, channel_label: str, video: Video) -> None:
         method="POST",
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        if resp.status >= 300:
-            raise RuntimeError(f"Discord webhook failed with status {resp.status}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            if resp.status >= 300:
+                raise RuntimeError(f"Discord webhook failed with status {resp.status}")
+    except urllib.error.HTTPError as err:
+        body = err.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Discord webhook HTTP {err.code}: {body or err.reason}") from err
 
 
 def parse_args() -> argparse.Namespace:
@@ -234,6 +238,9 @@ def main() -> int:
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
     if not webhook_url:
         print("ERROR: DISCORD_WEBHOOK_URL is not set", file=sys.stderr)
+        return 2
+    if "discord.com/api/webhooks" not in webhook_url and "discordapp.com/api/webhooks" not in webhook_url:
+        print("ERROR: DISCORD_WEBHOOK_URL does not look like a Discord webhook URL", file=sys.stderr)
         return 2
 
     youtube_api_key = (
@@ -286,17 +293,21 @@ def main() -> int:
             last_seen = state.get(channel_key)
             videos_to_post = should_post_videos(videos, last_seen, args.force_latest)
 
-            if not last_seen:
-                state[channel_key] = videos[0].video_id
-                state_changed = True
-                print(f"  Initialized last-seen to {videos[0].video_id}")
-
+            # Post first. We only update state after successful posting to avoid
+            # losing notifications when Discord webhook calls fail.
             for video in videos_to_post:
                 post_to_discord(webhook_url, cfg["label"], video)
                 posted_count += 1
                 print(f"  Posted: {video.video_id} - {video.title}")
 
-            if state.get(channel_key) != videos[0].video_id:
+            if not last_seen and not videos_to_post:
+                # First non-forced run bootstrap: track current latest so future runs
+                # only post genuinely new videos.
+                state[channel_key] = videos[0].video_id
+                state_changed = True
+                print(f"  Initialized last-seen to {videos[0].video_id}")
+
+            if videos_to_post and state.get(channel_key) != videos[0].video_id:
                 state[channel_key] = videos[0].video_id
                 state_changed = True
                 print(f"  Updated last-seen to {videos[0].video_id}")
