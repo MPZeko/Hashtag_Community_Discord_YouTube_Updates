@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -25,11 +26,10 @@ from typing import Dict, List
 CHANNELS = {
     "hashtag_united": {
         "label": "Hashtag United",
+        # Keep this only for logs; we avoid fetching this URL directly in automation.
         "channel_url": "https://www.youtube.com/@HashtagUnited",
-        # We intentionally use RSS feed URLs directly to avoid scraping channel HTML,
-        # because that can return 403 in GitHub-hosted environments.
         "feed_urls": [
-            # Keep user feed as one possible source.
+            # Known/possible feed endpoints. We try all of them.
             "https://www.youtube.com/feeds/videos.xml?user=HashtagUnited",
         ],
     },
@@ -41,6 +41,7 @@ CHANNELS = {
         ],
     },
 }
+
 
 
 @dataclass
@@ -108,23 +109,19 @@ def fetch_feed_videos(feed_urls: List[str]) -> List[Video]:
 
 
 
-def resolve_channel_id_with_ytdlp(channel_url: str) -> str | None:
-    """Resolve YouTube channel_id using yt-dlp as a robust fallback.
-
-    This avoids relying on brittle HTML parsing and works when direct user-feed URLs
-    are unknown or return 404.
-    """
+def resolve_channel_id_with_ytdlp_search(channel_label: str) -> str | None:
+    """Resolve channel_id via yt-dlp search fallback (without handle URL scraping)."""
     if not shutil.which("yt-dlp"):
         return None
 
-    # We only need metadata, so we request a tiny flat playlist payload.
+    # Searching videos is often more reliable than loading a channel handle page in CI.
     cmd = [
         "yt-dlp",
         "--flat-playlist",
         "--playlist-end",
-        "1",
+        "5",
         "-J",
-        f"{channel_url}/videos",
+        f"ytsearch5:{channel_label}",
     ]
 
     try:
@@ -133,30 +130,50 @@ def resolve_channel_id_with_ytdlp(channel_url: str) -> str | None:
     except (subprocess.SubprocessError, json.JSONDecodeError):
         return None
 
-    for key in ("channel_id", "uploader_id"):
-        value = data.get(key)
-        if isinstance(value, str) and value.startswith("UC"):
-            return value
+    entries = data.get("entries") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        return None
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        channel_id = entry.get("channel_id") or entry.get("uploader_id")
+        if isinstance(channel_id, str) and channel_id.startswith("UC"):
+            return channel_id
 
     return None
 
 
+def fetch_feed_videos_with_retry(feed_urls: List[str], retries: int = 2, delay_seconds: float = 2.0) -> List[Video]:
+    """Try feed URLs with small retries to survive intermittent YouTube 403/5xx errors."""
+    last_error: str | None = None
+
+    for attempt in range(1, retries + 2):
+        try:
+            return fetch_feed_videos(feed_urls)
+        except RuntimeError as exc:
+            last_error = str(exc)
+            if attempt <= retries:
+                time.sleep(delay_seconds * attempt)
+
+    raise RuntimeError(last_error or "Unknown feed fetch error")
+
+
 def fetch_videos_with_fallback(cfg: Dict[str, object]) -> List[Video]:
-    """Fetch videos from configured feeds, then fallback to channel-id resolution."""
+    """Fetch videos from feeds, then fallback to channel_id feed derived from yt-dlp search."""
     feed_urls = cfg.get("feed_urls", [])
     if isinstance(feed_urls, list) and feed_urls:
         try:
-            return fetch_feed_videos(feed_urls)
+            return fetch_feed_videos_with_retry(feed_urls)
         except RuntimeError:
             pass
 
-    # Fallback: resolve channel ID via yt-dlp and query official feed endpoint.
-    channel_url = str(cfg.get("channel_url", "")).rstrip("/")
-    channel_id = resolve_channel_id_with_ytdlp(channel_url)
+    # Fallback: resolve channel ID via yt-dlp search and query official channel_id feed.
+    channel_id = resolve_channel_id_with_ytdlp_search(str(cfg.get("label", "")))
     if channel_id:
-        return fetch_feed_videos([f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"])
+        return fetch_feed_videos_with_retry([f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"])
 
-    raise RuntimeError("Could not fetch feed from configured URLs and yt-dlp fallback did not resolve channel ID")
+    raise RuntimeError("Could not fetch feed from configured URLs and yt-dlp search fallback did not resolve channel ID")
 
 
 def load_state(path: Path) -> Dict[str, str]:
@@ -269,6 +286,7 @@ def main() -> int:
     selected_keys = list(CHANNELS.keys()) if args.channel == "all" else [args.channel]
     state_changed = False
     posted_count = 0
+    channel_errors: List[str] = []
 
     for channel_key in selected_keys:
         cfg = CHANNELS[channel_key]
@@ -301,11 +319,21 @@ def main() -> int:
                 print(f"  Updated last-seen to {videos[0].video_id}")
 
         except (RuntimeError, urllib.error.URLError, ET.ParseError, TimeoutError) as exc:
-            print(f"  ERROR for {channel_key}: {exc}", file=sys.stderr)
-            return 1
+            error_msg = f"ERROR for {channel_key}: {exc}"
+            print(f"  {error_msg}", file=sys.stderr)
+            channel_errors.append(error_msg)
+            continue
 
     if state_changed:
         save_state(state_file, state)
+
+    if channel_errors and posted_count == 0:
+        print("Failed to process all selected channels.", file=sys.stderr)
+        return 1
+
+    if channel_errors:
+        print(f"Completed with warnings. Posted {posted_count} video(s).")
+        return 0
 
     print(f"Done. Posted {posted_count} video(s).")
     return 0

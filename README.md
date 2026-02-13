@@ -11,8 +11,8 @@ This repository contains an automated GitHub Actions workflow that watches selec
 
 - A scheduled GitHub Actions workflow runs every 2 hours.
 - It reads each channel's YouTube Atom feed via configured feed endpoints.
-- If a configured endpoint fails (for example HTTP 404), it falls back to resolving the channel ID with `yt-dlp` and then uses the official `channel_id` feed URL.
-- This avoids fragile channel-page scraping that can fail in CI.
+- If a configured endpoint fails (for example HTTP 403/404), it retries and then falls back to resolving channel IDs using `yt-dlp` search metadata (without requesting `@handle` pages directly).
+- It then uses the official `channel_id` feed URL for stable polling.
 - It compares the latest videos against a state file (`.github/data/last_seen.json`) to avoid duplicate Discord posts.
 - If there are new videos, it posts them to Discord in chronological order.
 
@@ -49,3 +49,9 @@ You can choose:
 - `.github/workflows/youtube-discord-updates.yml`: workflow definition
 - `.github/scripts/youtube_to_discord.py`: sync script with comments
 - `.github/data/last_seen.json`: persistent last-posted state per channel
+
+
+## Error handling
+
+- Channel fetches use retries for transient YouTube errors.
+- If one channel fails but another succeeds, the workflow completes with warnings instead of failing the whole run.
