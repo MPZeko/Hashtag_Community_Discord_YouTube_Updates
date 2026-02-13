@@ -16,7 +16,7 @@ To make the automation stable, this implementation uses the **official YouTube D
 ## How it works
 
 - A scheduled GitHub Actions workflow runs every 2 hours.
-- The script calls YouTube Data API for each configured channel ID and reads latest videos.
+- The script calls YouTube Data API and resolves each channel ID from the configured handle automatically (or uses optional channel ID overrides if provided).
 - It compares latest video IDs against `.github/data/last_seen.json` to avoid duplicate Discord posts.
 - If there are new videos, it posts them to Discord in chronological order.
 
@@ -31,9 +31,9 @@ Messages include the direct YouTube URL (`https://www.youtube.com/watch?v=...`).
 Go to **Settings → Secrets and variables → Actions** and add:
 
 - `DISCORD_WEBHOOK_URL`
-- `YOUTUBE_API_KEY`
-- `HASHTAG_UNITED_CHANNEL_ID`
-- `HASHTAG_UNITED_EXTRA_CHANNEL_ID`
+- `YOUTUBE_API_KEY` **or** `Youtube_Hashtag_United_API` (this matches the exact secret you created)
+- `HASHTAG_UNITED_CHANNEL_ID` (optional override)
+- `HASHTAG_UNITED_EXTRA_CHANNEL_ID` (optional override)
 
 ## How to get `YOUTUBE_API_KEY`
 

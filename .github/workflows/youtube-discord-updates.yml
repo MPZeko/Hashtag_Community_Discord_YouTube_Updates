@@ -47,6 +47,7 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          Youtube_Hashtag_United_API: ${{ secrets.Youtube_Hashtag_United_API }}
           HASHTAG_UNITED_CHANNEL_ID: ${{ secrets.HASHTAG_UNITED_CHANNEL_ID }}
           HASHTAG_UNITED_EXTRA_CHANNEL_ID: ${{ secrets.HASHTAG_UNITED_EXTRA_CHANNEL_ID }}
           INPUT_CHANNEL: ${{ github.event.inputs.channel }}

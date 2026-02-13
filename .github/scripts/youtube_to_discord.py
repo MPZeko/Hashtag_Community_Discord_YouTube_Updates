@@ -22,15 +22,18 @@ from typing import Dict, List
 CHANNELS = {
     "hashtag_united": {
         "label": "Hashtag United",
-        # Set via GitHub secret HASHTAG_UNITED_CHANNEL_ID
+        "handle": "HashtagUnited",
+        # Optional override via secret/env.
         "channel_id_env": "HASHTAG_UNITED_CHANNEL_ID",
     },
     "hashtag_united_extra": {
         "label": "Hashtag United Extra",
-        # Set via GitHub secret HASHTAG_UNITED_EXTRA_CHANNEL_ID
+        "handle": "HashtagUnitedExtra",
+        # Optional override via secret/env.
         "channel_id_env": "HASHTAG_UNITED_EXTRA_CHANNEL_ID",
     },
 }
+
 
 
 @dataclass
@@ -46,6 +49,33 @@ def _http_get_json(url: str) -> Dict:
     req = urllib.request.Request(url, headers={"User-Agent": "youtube-discord-bot/1.0"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
+
+
+def resolve_channel_id_from_handle(api_key: str, handle: str) -> str | None:
+    """Resolve channel ID via official YouTube Data API using channel handle."""
+    params = {
+        "part": "id",
+        "forHandle": handle,
+        "key": api_key,
+    }
+    url = "https://www.googleapis.com/youtube/v3/channels?" + urllib.parse.urlencode(params)
+
+    try:
+        payload = _http_get_json(url)
+    except Exception:
+        return None
+
+    items = payload.get("items", [])
+    if isinstance(items, list) and items:
+        first = items[0]
+        if isinstance(first, dict):
+            cid = first.get("id")
+            if isinstance(cid, str) and cid.startswith("UC"):
+                return cid
+
+    return None
 
 
 def fetch_latest_videos_from_api(api_key: str, channel_id: str, max_results: int = 10) -> List[Video]:
@@ -171,9 +201,12 @@ def main() -> int:
         print("ERROR: DISCORD_WEBHOOK_URL is not set", file=sys.stderr)
         return 2
 
-    youtube_api_key = os.environ.get("YOUTUBE_API_KEY", "").strip()
+    youtube_api_key = (
+        os.environ.get("YOUTUBE_API_KEY", "").strip()
+        or os.environ.get("Youtube_Hashtag_United_API", "").strip()
+    )
     if not youtube_api_key:
-        print("ERROR: YOUTUBE_API_KEY is not set", file=sys.stderr)
+        print("ERROR: YOUTUBE_API_KEY is not set (or Youtube_Hashtag_United_API)", file=sys.stderr)
         return 2
 
     state_file = Path(args.state_file)
@@ -188,11 +221,20 @@ def main() -> int:
         cfg = CHANNELS[channel_key]
         env_name = cfg["channel_id_env"]
         channel_id = os.environ.get(env_name, "").strip()
-        print(f"Processing {channel_key} (channel_id from ${env_name})")
+        source = f"env ${env_name}"
+
+        # Auto-resolve channel id from handle when env override is not configured.
+        if not channel_id:
+            resolved = resolve_channel_id_from_handle(youtube_api_key, str(cfg["handle"]))
+            if resolved:
+                channel_id = resolved
+                source = f"handle @{cfg['handle']}"
+
+        print(f"Processing {channel_key} (channel_id from {source})")
 
         if not channel_id:
-            channel_errors.append(f"ERROR for {channel_key}: missing env {env_name}")
-            print(f"  ERROR for {channel_key}: missing env {env_name}", file=sys.stderr)
+            channel_errors.append(f"ERROR for {channel_key}: could not resolve channel id")
+            print(f"  ERROR for {channel_key}: could not resolve channel id", file=sys.stderr)
             continue
 
         try:
