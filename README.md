@@ -7,51 +7,65 @@ This repository contains an automated GitHub Actions workflow that watches selec
 - `https://www.youtube.com/@HashtagUnited`
 - `https://www.youtube.com/@HashtagUnitedExtra`
 
+## Why previous versions failed
+
+Direct polling of YouTube pages/feeds from GitHub-hosted runners can return intermittent or persistent **HTTP 403/404** responses.
+
+To make the automation stable, this implementation uses the **official YouTube Data API** (`googleapis.com`) instead of scraping/polling `youtube.com` feed endpoints.
+
 ## How it works
 
 - A scheduled GitHub Actions workflow runs every 2 hours.
-- It reads each channel's YouTube Atom feed via configured feed endpoints.
-- If a configured endpoint fails (for example HTTP 403/404), it retries and then falls back to resolving channel IDs using `yt-dlp` search metadata (without requesting `@handle` pages directly).
-- It then uses the official `channel_id` feed URL for stable polling.
-- It compares the latest videos against a state file (`.github/data/last_seen.json`) to avoid duplicate Discord posts.
+- The script calls YouTube Data API for each configured channel ID and reads latest videos.
+- It compares latest video IDs against `.github/data/last_seen.json` to avoid duplicate Discord posts.
 - If there are new videos, it posts them to Discord in chronological order.
 
-> On the very first run, the workflow initializes state and does not post historical videos by default.
+> On first run, state is initialized and historical videos are not posted by default.
 
 ## Discord preview behavior
 
-Messages include the direct YouTube video URL. Discord usually auto-embeds YouTube links so the video can be previewed in Discord. If embedding is unavailable, users can still click through to YouTube.
+Messages include the direct YouTube URL (`https://www.youtube.com/watch?v=...`). Discord normally auto-embeds this as a video preview; if not, clicking opens YouTube.
 
-## Setup
+## Required GitHub Secrets
 
-1. Go to your GitHub repository settings.
-2. Open **Settings → Secrets and variables → Actions**.
-3. Add a new repository secret named:
-   - `DISCORD_WEBHOOK_URL`
-4. Set its value to your Discord channel webhook URL.
+Go to **Settings → Secrets and variables → Actions** and add:
+
+- `DISCORD_WEBHOOK_URL`
+- `YOUTUBE_API_KEY`
+- `HASHTAG_UNITED_CHANNEL_ID`
+- `HASHTAG_UNITED_EXTRA_CHANNEL_ID`
+
+## How to get `YOUTUBE_API_KEY`
+
+1. Open Google Cloud Console.
+2. Create/select a project.
+3. Enable **YouTube Data API v3**.
+4. Create an API key.
+5. Save it as `YOUTUBE_API_KEY` secret.
+
+## How to get channel IDs
+
+Use either method:
+
+- From channel page source tools/extensions that show `channelId` (`UC...`), or
+- Via YouTube Data API explorer / script once.
+
+Then store:
+
+- `HASHTAG_UNITED_CHANNEL_ID` = channel ID for `@HashtagUnited`
+- `HASHTAG_UNITED_EXTRA_CHANNEL_ID` = channel ID for `@HashtagUnitedExtra`
 
 ## Manual testing (Run workflow)
 
-The workflow supports manual execution from **Actions → YouTube to Discord Updates → Run workflow**.
+In **Actions → YouTube to Discord Updates → Run workflow**, choose:
 
-You can choose:
-
-- `channel`
-  - `all`
-  - `hashtag_united`
-  - `hashtag_united_extra`
-- `force_latest`
-  - `false`: normal mode (only genuinely new uploads)
-  - `true`: always send the current latest upload (useful for manual verification)
+- `channel`: `all`, `hashtag_united`, or `hashtag_united_extra`
+- `force_latest`:
+  - `false`: only genuinely new uploads
+  - `true`: always post current latest upload (manual verification)
 
 ## Files
 
-- `.github/workflows/youtube-discord-updates.yml`: workflow definition
-- `.github/scripts/youtube_to_discord.py`: sync script with comments
-- `.github/data/last_seen.json`: persistent last-posted state per channel
-
-
-## Error handling
-
-- Channel fetches use retries for transient YouTube errors.
-- If one channel fails but another succeeds, the workflow completes with warnings instead of failing the whole run.
+- `.github/workflows/youtube-discord-updates.yml`: workflow
+- `.github/scripts/youtube_to_discord.py`: main sync script
+- `.github/data/last_seen.json`: state storage

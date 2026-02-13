@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Post new videos from selected YouTube channels to Discord via webhook.
 
-This script is intended to run in GitHub Actions, but it can also be run locally.
-It keeps a small JSON state file with the last posted video ID per channel.
+This version uses the official YouTube Data API (googleapis.com) instead of
+scraping/feed polling from youtube.com endpoints, which can return 403 in CI.
 """
 
 from __future__ import annotations
@@ -10,13 +10,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
-import subprocess
 import sys
-import time
-import urllib.error
+import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,22 +22,15 @@ from typing import Dict, List
 CHANNELS = {
     "hashtag_united": {
         "label": "Hashtag United",
-        # Keep this only for logs; we avoid fetching this URL directly in automation.
-        "channel_url": "https://www.youtube.com/@HashtagUnited",
-        "feed_urls": [
-            # Known/possible feed endpoints. We try all of them.
-            "https://www.youtube.com/feeds/videos.xml?user=HashtagUnited",
-        ],
+        # Set via GitHub secret HASHTAG_UNITED_CHANNEL_ID
+        "channel_id_env": "HASHTAG_UNITED_CHANNEL_ID",
     },
     "hashtag_united_extra": {
         "label": "Hashtag United Extra",
-        "channel_url": "https://www.youtube.com/@HashtagUnitedExtra",
-        "feed_urls": [
-            "https://www.youtube.com/feeds/videos.xml?user=HashtagUnitedExtra",
-        ],
+        # Set via GitHub secret HASHTAG_UNITED_EXTRA_CHANNEL_ID
+        "channel_id_env": "HASHTAG_UNITED_EXTRA_CHANNEL_ID",
     },
 }
-
 
 
 @dataclass
@@ -52,128 +41,51 @@ class Video:
     published: str
 
 
-def _http_get_text(url: str) -> str:
-    """Fetch text from URL with a browser-like User-Agent for compatibility."""
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-            )
-        },
-    )
+def _http_get_json(url: str) -> Dict:
+    """Fetch JSON from a URL and parse it."""
+    req = urllib.request.Request(url, headers={"User-Agent": "youtube-discord-bot/1.0"})
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read().decode("utf-8", errors="replace")
+        return json.loads(resp.read().decode("utf-8", errors="replace"))
 
 
-def parse_feed(xml_text: str) -> List[Video]:
-    """Parse a YouTube Atom feed payload into video records."""
-    root = ET.fromstring(xml_text)
-    ns = {
-        "atom": "http://www.w3.org/2005/Atom",
-        "yt": "http://www.youtube.com/xml/schemas/2015",
+def fetch_latest_videos_from_api(api_key: str, channel_id: str, max_results: int = 10) -> List[Video]:
+    """Fetch latest channel videos via YouTube Data API search endpoint."""
+    params = {
+        "part": "snippet",
+        "channelId": channel_id,
+        "order": "date",
+        "type": "video",
+        "maxResults": str(max_results),
+        "key": api_key,
     }
+    url = "https://www.googleapis.com/youtube/v3/search?" + urllib.parse.urlencode(params)
+    payload = _http_get_json(url)
 
+    items = payload.get("items", [])
     videos: List[Video] = []
-    for entry in root.findall("atom:entry", ns):
-        video_id = entry.findtext("yt:videoId", default="", namespaces=ns)
-        title = entry.findtext("atom:title", default="", namespaces=ns)
-        published = entry.findtext("atom:published", default="", namespaces=ns)
-        link_el = entry.find("atom:link", ns)
-        url = link_el.attrib.get("href", "") if link_el is not None else ""
+    for item in items:
+        if not isinstance(item, dict):
+            continue
 
-        if video_id and url:
-            videos.append(Video(video_id=video_id, title=title, url=url, published=published))
+        id_obj = item.get("id", {})
+        snippet = item.get("snippet", {})
+        video_id = id_obj.get("videoId") if isinstance(id_obj, dict) else None
+        title = snippet.get("title", "") if isinstance(snippet, dict) else ""
+        published = snippet.get("publishedAt", "") if isinstance(snippet, dict) else ""
+
+        if not video_id:
+            continue
+
+        videos.append(
+            Video(
+                video_id=video_id,
+                title=title,
+                published=published,
+                url=f"https://www.youtube.com/watch?v={video_id}",
+            )
+        )
 
     return videos
-
-
-def fetch_feed_videos(feed_urls: List[str]) -> List[Video]:
-    """Try feed URLs in order and return videos from the first successful source."""
-    last_error: str | None = None
-
-    for feed_url in feed_urls:
-        try:
-            xml_text = _http_get_text(feed_url)
-            videos = parse_feed(xml_text)
-            if videos:
-                return videos
-            last_error = f"No entries in feed: {feed_url}"
-        except (urllib.error.URLError, ET.ParseError) as exc:
-            last_error = f"{feed_url} -> {exc}"
-            continue
-
-    raise RuntimeError(last_error or "No valid feed source available")
-
-
-
-
-def resolve_channel_id_with_ytdlp_search(channel_label: str) -> str | None:
-    """Resolve channel_id via yt-dlp search fallback (without handle URL scraping)."""
-    if not shutil.which("yt-dlp"):
-        return None
-
-    # Searching videos is often more reliable than loading a channel handle page in CI.
-    cmd = [
-        "yt-dlp",
-        "--flat-playlist",
-        "--playlist-end",
-        "5",
-        "-J",
-        f"ytsearch5:{channel_label}",
-    ]
-
-    try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=60)
-        data = json.loads(result.stdout)
-    except (subprocess.SubprocessError, json.JSONDecodeError):
-        return None
-
-    entries = data.get("entries") if isinstance(data, dict) else None
-    if not isinstance(entries, list):
-        return None
-
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        channel_id = entry.get("channel_id") or entry.get("uploader_id")
-        if isinstance(channel_id, str) and channel_id.startswith("UC"):
-            return channel_id
-
-    return None
-
-
-def fetch_feed_videos_with_retry(feed_urls: List[str], retries: int = 2, delay_seconds: float = 2.0) -> List[Video]:
-    """Try feed URLs with small retries to survive intermittent YouTube 403/5xx errors."""
-    last_error: str | None = None
-
-    for attempt in range(1, retries + 2):
-        try:
-            return fetch_feed_videos(feed_urls)
-        except RuntimeError as exc:
-            last_error = str(exc)
-            if attempt <= retries:
-                time.sleep(delay_seconds * attempt)
-
-    raise RuntimeError(last_error or "Unknown feed fetch error")
-
-
-def fetch_videos_with_fallback(cfg: Dict[str, object]) -> List[Video]:
-    """Fetch videos from feeds, then fallback to channel_id feed derived from yt-dlp search."""
-    feed_urls = cfg.get("feed_urls", [])
-    if isinstance(feed_urls, list) and feed_urls:
-        try:
-            return fetch_feed_videos_with_retry(feed_urls)
-        except RuntimeError:
-            pass
-
-    # Fallback: resolve channel ID via yt-dlp search and query official channel_id feed.
-    channel_id = resolve_channel_id_with_ytdlp_search(str(cfg.get("label", "")))
-    if channel_id:
-        return fetch_feed_videos_with_retry([f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"])
-
-    raise RuntimeError("Could not fetch feed from configured URLs and yt-dlp search fallback did not resolve channel ID")
 
 
 def load_state(path: Path) -> Dict[str, str]:
@@ -190,11 +102,7 @@ def save_state(path: Path, state: Dict[str, str]) -> None:
 
 
 def should_post_videos(videos: List[Video], last_seen_video_id: str | None, force_latest: bool) -> List[Video]:
-    """Return videos to post.
-
-    - force_latest: post the latest video even if it has been seen.
-    - normal mode: post all videos that are newer than last seen ID.
-    """
+    """Return videos to post based on state and mode."""
     if not videos:
         return []
 
@@ -202,7 +110,7 @@ def should_post_videos(videos: List[Video], last_seen_video_id: str | None, forc
         return [videos[0]]
 
     if not last_seen_video_id:
-        # First run bootstrap: avoid posting historical content by default.
+        # First run bootstrap: avoid posting all historical uploads.
         return []
 
     if videos[0].video_id == last_seen_video_id:
@@ -214,15 +122,12 @@ def should_post_videos(videos: List[Video], last_seen_video_id: str | None, forc
             break
         new_videos.append(video)
 
-    # Post from oldest -> newest for natural order in Discord.
+    # Send in chronological order for cleaner Discord timeline.
     return list(reversed(new_videos))
 
 
 def post_to_discord(webhook_url: str, channel_label: str, video: Video) -> None:
-    """Post one video message to Discord webhook.
-
-    We include the plain URL in content, so Discord can auto-expand rich embeds.
-    """
+    """Post one video to Discord webhook. URL is included for Discord embed preview."""
     published_display = video.published
     try:
         dt = datetime.fromisoformat(video.published.replace("Z", "+00:00")).astimezone(timezone.utc)
@@ -236,13 +141,12 @@ def post_to_discord(webhook_url: str, channel_label: str, video: Video) -> None:
             f"**{video.title}**\n"
             f"Published: {published_display}\n"
             f"{video.url}"
-        ),
+        )
     }
 
-    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         webhook_url,
-        data=body,
+        data=json.dumps(payload).encode("utf-8"),
         method="POST",
         headers={"Content-Type": "application/json"},
     )
@@ -253,22 +157,9 @@ def post_to_discord(webhook_url: str, channel_label: str, video: Video) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Post new YouTube uploads to Discord")
-    parser.add_argument(
-        "--channel",
-        choices=["all", *CHANNELS.keys()],
-        default="all",
-        help="Channel key to process (default: all)",
-    )
-    parser.add_argument(
-        "--state-file",
-        default=".github/data/last_seen.json",
-        help="Path to JSON file storing the last posted video IDs",
-    )
-    parser.add_argument(
-        "--force-latest",
-        action="store_true",
-        help="Always post the latest video for selected channels",
-    )
+    parser.add_argument("--channel", choices=["all", *CHANNELS.keys()], default="all")
+    parser.add_argument("--state-file", default=".github/data/last_seen.json")
+    parser.add_argument("--force-latest", action="store_true")
     return parser.parse_args()
 
 
@@ -278,6 +169,11 @@ def main() -> int:
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
     if not webhook_url:
         print("ERROR: DISCORD_WEBHOOK_URL is not set", file=sys.stderr)
+        return 2
+
+    youtube_api_key = os.environ.get("YOUTUBE_API_KEY", "").strip()
+    if not youtube_api_key:
+        print("ERROR: YOUTUBE_API_KEY is not set", file=sys.stderr)
         return 2
 
     state_file = Path(args.state_file)
@@ -290,19 +186,25 @@ def main() -> int:
 
     for channel_key in selected_keys:
         cfg = CHANNELS[channel_key]
-        print(f"Processing {channel_key} ({cfg['channel_url']})")
+        env_name = cfg["channel_id_env"]
+        channel_id = os.environ.get(env_name, "").strip()
+        print(f"Processing {channel_key} (channel_id from ${env_name})")
+
+        if not channel_id:
+            channel_errors.append(f"ERROR for {channel_key}: missing env {env_name}")
+            print(f"  ERROR for {channel_key}: missing env {env_name}", file=sys.stderr)
+            continue
 
         try:
-            videos = fetch_videos_with_fallback(cfg)
+            videos = fetch_latest_videos_from_api(youtube_api_key, channel_id)
             if not videos:
-                print(f"  No feed entries found for {channel_key}")
+                print(f"  No videos returned for {channel_key}")
                 continue
 
             last_seen = state.get(channel_key)
             videos_to_post = should_post_videos(videos, last_seen, args.force_latest)
 
             if not last_seen:
-                # Bootstrap state on first run so the next run posts only genuinely new videos.
                 state[channel_key] = videos[0].video_id
                 state_changed = True
                 print(f"  Initialized last-seen to {videos[0].video_id}")
@@ -312,17 +214,14 @@ def main() -> int:
                 posted_count += 1
                 print(f"  Posted: {video.video_id} - {video.title}")
 
-            # Update state to current latest once processing succeeds.
             if state.get(channel_key) != videos[0].video_id:
                 state[channel_key] = videos[0].video_id
                 state_changed = True
                 print(f"  Updated last-seen to {videos[0].video_id}")
 
-        except (RuntimeError, urllib.error.URLError, ET.ParseError, TimeoutError) as exc:
-            error_msg = f"ERROR for {channel_key}: {exc}"
-            print(f"  {error_msg}", file=sys.stderr)
-            channel_errors.append(error_msg)
-            continue
+        except Exception as exc:
+            channel_errors.append(f"ERROR for {channel_key}: {exc}")
+            print(f"  ERROR for {channel_key}: {exc}", file=sys.stderr)
 
     if state_changed:
         save_state(state_file, state)
