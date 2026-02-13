@@ -85,6 +85,7 @@ You can still override them using the optional channel ID secrets above.
 
 ## Troubleshooting 403 errors
 
+- Webhook requests are sent as JSON with `Content-Type: application/json`, `Accept: application/json`, and a standard browser-like `User-Agent` for maximum compatibility.
 If the workflow logs show `HTTP Error 403: Forbidden` or `YouTube API 403 (...)`, the most common cause is API key restrictions.
 
 Check the Google Cloud API key settings:

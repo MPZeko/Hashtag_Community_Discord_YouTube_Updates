@@ -49,6 +49,19 @@ class Video:
     published: str
 
 
+def discord_request_headers() -> Dict[str, str]:
+    """Headers for Discord webhook calls using a normal browser-like profile."""
+    return {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+    }
+
+
 def _format_youtube_api_error(err: urllib.error.HTTPError) -> str:
     """Extract human-friendly reason from YouTube API error responses."""
     try:
@@ -203,7 +216,7 @@ def post_to_discord(webhook_url: str, channel_label: str, video: Video) -> None:
     payload = {
         "content": (
             f"📺 **{channel_label}** uploaded a new video\n"
-            f"**{video.title}**\n"
+            f"**{video.title or 'New upload'}**\n"
             f"Published: {published_display}\n"
             f"{video.url}"
         )
@@ -213,7 +226,7 @@ def post_to_discord(webhook_url: str, channel_label: str, video: Video) -> None:
         webhook_url,
         data=json.dumps(payload).encode("utf-8"),
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers=discord_request_headers(),
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -231,12 +244,12 @@ def post_to_discord(webhook_url: str, channel_label: str, video: Video) -> None:
 
 def post_test_message_to_discord(webhook_url: str, message: str) -> None:
     """Send a manual webhook test message without calling YouTube APIs."""
-    payload = {"content": f"🧪 Webhook test from GitHub Actions\n{message}"}
+    payload = {"content": f"🧪 Webhook test from GitHub Actions\n{(message or 'Webhook test').strip()}"}
     req = urllib.request.Request(
         webhook_url,
         data=json.dumps(payload).encode("utf-8"),
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers=discord_request_headers(),
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
