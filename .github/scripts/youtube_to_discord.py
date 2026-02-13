@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 import urllib.error
 import urllib.request
@@ -24,11 +23,19 @@ from typing import Dict, List
 CHANNELS = {
     "hashtag_united": {
         "label": "Hashtag United",
-        "handle_url": "https://www.youtube.com/@HashtagUnited",
+        "channel_url": "https://www.youtube.com/@HashtagUnited",
+        # We intentionally use RSS feed URLs directly to avoid scraping channel HTML,
+        # because that can return 403 in GitHub-hosted environments.
+        "feed_urls": [
+            "https://www.youtube.com/feeds/videos.xml?user=HashtagUnited",
+        ],
     },
     "hashtag_united_extra": {
         "label": "Hashtag United Extra",
-        "handle_url": "https://www.youtube.com/@HashtagUnitedExtra",
+        "channel_url": "https://www.youtube.com/@HashtagUnitedExtra",
+        "feed_urls": [
+            "https://www.youtube.com/feeds/videos.xml?user=HashtagUnitedExtra",
+        ],
     },
 }
 
@@ -56,33 +63,9 @@ def _http_get_text(url: str) -> str:
         return resp.read().decode("utf-8", errors="replace")
 
 
-def resolve_channel_id(handle_url: str) -> str:
-    """Resolve a YouTube channel ID from a handle URL.
-
-    We read the channel page and extract the channel ID from page JSON.
-    """
-    html = _http_get_text(handle_url)
-
-    # YouTube typically embeds channelId in page data.
-    patterns = [
-        r'"channelId":"(UC[0-9A-Za-z_-]{20,})"',
-        r'"externalId":"(UC[0-9A-Za-z_-]{20,})"',
-        r'"browseId":"(UC[0-9A-Za-z_-]{20,})"',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, html)
-        if match:
-            return match.group(1)
-
-    raise RuntimeError(f"Could not resolve channel ID from {handle_url}")
-
-
-def fetch_feed_videos(channel_id: str) -> List[Video]:
-    """Fetch and parse the channel Atom feed (newest-first from YouTube)."""
-    feed_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-    xml_text = _http_get_text(feed_url)
+def parse_feed(xml_text: str) -> List[Video]:
+    """Parse a YouTube Atom feed payload into video records."""
     root = ET.fromstring(xml_text)
-
     ns = {
         "atom": "http://www.w3.org/2005/Atom",
         "yt": "http://www.youtube.com/xml/schemas/2015",
@@ -100,6 +83,24 @@ def fetch_feed_videos(channel_id: str) -> List[Video]:
             videos.append(Video(video_id=video_id, title=title, url=url, published=published))
 
     return videos
+
+
+def fetch_feed_videos(feed_urls: List[str]) -> List[Video]:
+    """Try feed URLs in order and return videos from the first successful source."""
+    last_error: str | None = None
+
+    for feed_url in feed_urls:
+        try:
+            xml_text = _http_get_text(feed_url)
+            videos = parse_feed(xml_text)
+            if videos:
+                return videos
+            last_error = f"No entries in feed: {feed_url}"
+        except (urllib.error.URLError, ET.ParseError) as exc:
+            last_error = f"{feed_url} -> {exc}"
+            continue
+
+    raise RuntimeError(last_error or "No valid feed source available")
 
 
 def load_state(path: Path) -> Dict[str, str]:
@@ -215,11 +216,10 @@ def main() -> int:
 
     for channel_key in selected_keys:
         cfg = CHANNELS[channel_key]
-        print(f"Processing {channel_key} ({cfg['handle_url']})")
+        print(f"Processing {channel_key} ({cfg['channel_url']})")
 
         try:
-            channel_id = resolve_channel_id(cfg["handle_url"])
-            videos = fetch_feed_videos(channel_id)
+            videos = fetch_feed_videos(cfg["feed_urls"])
             if not videos:
                 print(f"  No feed entries found for {channel_key}")
                 continue

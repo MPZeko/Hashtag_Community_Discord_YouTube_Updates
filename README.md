@@ -10,8 +10,8 @@ This repository contains an automated GitHub Actions workflow that watches selec
 ## How it works
 
 - A scheduled GitHub Actions workflow runs every 2 hours.
-- It resolves each channel handle to a YouTube channel ID.
-- It reads each channel's Atom feed.
+- It reads each channel's YouTube Atom feed directly via stable feed endpoints.
+- This avoids fragile channel-page scraping that can fail with HTTP 403 in CI.
 - It compares the latest videos against a state file (`.github/data/last_seen.json`) to avoid duplicate Discord posts.
 - If there are new videos, it posts them to Discord in chronological order.
 
