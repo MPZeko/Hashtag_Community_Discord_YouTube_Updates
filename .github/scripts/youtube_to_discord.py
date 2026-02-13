@@ -10,6 +10,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -27,6 +29,7 @@ CHANNELS = {
         # We intentionally use RSS feed URLs directly to avoid scraping channel HTML,
         # because that can return 403 in GitHub-hosted environments.
         "feed_urls": [
+            # Keep user feed as one possible source.
             "https://www.youtube.com/feeds/videos.xml?user=HashtagUnited",
         ],
     },
@@ -101,6 +104,59 @@ def fetch_feed_videos(feed_urls: List[str]) -> List[Video]:
             continue
 
     raise RuntimeError(last_error or "No valid feed source available")
+
+
+
+
+def resolve_channel_id_with_ytdlp(channel_url: str) -> str | None:
+    """Resolve YouTube channel_id using yt-dlp as a robust fallback.
+
+    This avoids relying on brittle HTML parsing and works when direct user-feed URLs
+    are unknown or return 404.
+    """
+    if not shutil.which("yt-dlp"):
+        return None
+
+    # We only need metadata, so we request a tiny flat playlist payload.
+    cmd = [
+        "yt-dlp",
+        "--flat-playlist",
+        "--playlist-end",
+        "1",
+        "-J",
+        f"{channel_url}/videos",
+    ]
+
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=60)
+        data = json.loads(result.stdout)
+    except (subprocess.SubprocessError, json.JSONDecodeError):
+        return None
+
+    for key in ("channel_id", "uploader_id"):
+        value = data.get(key)
+        if isinstance(value, str) and value.startswith("UC"):
+            return value
+
+    return None
+
+
+def fetch_videos_with_fallback(cfg: Dict[str, object]) -> List[Video]:
+    """Fetch videos from configured feeds, then fallback to channel-id resolution."""
+    feed_urls = cfg.get("feed_urls", [])
+    if isinstance(feed_urls, list) and feed_urls:
+        try:
+            return fetch_feed_videos(feed_urls)
+        except RuntimeError:
+            pass
+
+    # Fallback: resolve channel ID via yt-dlp and query official feed endpoint.
+    channel_url = str(cfg.get("channel_url", "")).rstrip("/")
+    channel_id = resolve_channel_id_with_ytdlp(channel_url)
+    if channel_id:
+        return fetch_feed_videos([f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"])
+
+    raise RuntimeError("Could not fetch feed from configured URLs and yt-dlp fallback did not resolve channel ID")
 
 
 def load_state(path: Path) -> Dict[str, str]:
@@ -219,7 +275,7 @@ def main() -> int:
         print(f"Processing {channel_key} ({cfg['channel_url']})")
 
         try:
-            videos = fetch_feed_videos(cfg["feed_urls"])
+            videos = fetch_videos_with_fallback(cfg)
             if not videos:
                 print(f"  No feed entries found for {channel_key}")
                 continue
