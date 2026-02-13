@@ -16,7 +16,7 @@ To make the automation stable, this implementation uses the **official YouTube D
 ## How it works
 
 - A scheduled GitHub Actions workflow runs every 2 hours.
-- The script calls YouTube Data API and resolves each channel ID from the configured handle automatically (or uses optional channel ID overrides if provided).
+- The script calls YouTube Data API and uses built-in channel IDs by default (with optional secret-based overrides).
 - It compares latest video IDs against `.github/data/last_seen.json` to avoid duplicate Discord posts.
 - If there are new videos, it posts them to Discord in chronological order.
 
@@ -32,8 +32,8 @@ Go to **Settings → Secrets and variables → Actions** and add:
 
 - `DISCORD_WEBHOOK_URL`
 - `YOUTUBE_API_KEY` **or** `Youtube_Hashtag_United_API` (this matches the exact secret you created)
-- `HASHTAG_UNITED_CHANNEL_ID` (optional override)
-- `HASHTAG_UNITED_EXTRA_CHANNEL_ID` (optional override)
+- `HASHTAG_UNITED_CHANNEL_ID` (optional override; default is already configured)
+- `HASHTAG_UNITED_EXTRA_CHANNEL_ID` (optional override; default is already configured)
 
 ## How to get `YOUTUBE_API_KEY`
 
@@ -69,3 +69,11 @@ In **Actions → YouTube to Discord Updates → Run workflow**, choose:
 - `.github/workflows/youtube-discord-updates.yml`: workflow
 - `.github/scripts/youtube_to_discord.py`: main sync script
 - `.github/data/last_seen.json`: state storage
+
+
+## Built-in default channel IDs
+
+- Hashtag United: `UCeJ73ymlLhLctITwdi9iCVw`
+- Hashtag United Extra: `UCno_OxtA1RcOfWjWjUPpfQg`
+
+You can still override them using the optional channel ID secrets above.

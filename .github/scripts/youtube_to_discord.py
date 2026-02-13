@@ -23,12 +23,16 @@ CHANNELS = {
     "hashtag_united": {
         "label": "Hashtag United",
         "handle": "HashtagUnited",
+        # Default channel ID provided by repository owner.
+        "default_channel_id": "UCeJ73ymlLhLctITwdi9iCVw",
         # Optional override via secret/env.
         "channel_id_env": "HASHTAG_UNITED_CHANNEL_ID",
     },
     "hashtag_united_extra": {
         "label": "Hashtag United Extra",
         "handle": "HashtagUnitedExtra",
+        # Default channel ID provided by repository owner.
+        "default_channel_id": "UCno_OxtA1RcOfWjWjUPpfQg",
         # Optional override via secret/env.
         "channel_id_env": "HASHTAG_UNITED_EXTRA_CHANNEL_ID",
     },
@@ -223,7 +227,12 @@ def main() -> int:
         channel_id = os.environ.get(env_name, "").strip()
         source = f"env ${env_name}"
 
-        # Auto-resolve channel id from handle when env override is not configured.
+        # Use built-in stable defaults when no env override is configured.
+        if not channel_id:
+            channel_id = str(cfg.get("default_channel_id", "")).strip()
+            source = "repository default"
+
+        # As a final fallback, attempt handle-based API lookup.
         if not channel_id:
             resolved = resolve_channel_id_from_handle(youtube_api_key, str(cfg["handle"]))
             if resolved:
