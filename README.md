@@ -77,3 +77,17 @@ In **Actions → YouTube to Discord Updates → Run workflow**, choose:
 - Hashtag United Extra: `UCno_OxtA1RcOfWjWjUPpfQg`
 
 You can still override them using the optional channel ID secrets above.
+
+
+## Troubleshooting 403 errors
+
+If the workflow logs show `HTTP Error 403: Forbidden` or `YouTube API 403 (...)`, the most common cause is API key restrictions.
+
+Check the Google Cloud API key settings:
+
+- Ensure **YouTube Data API v3** is enabled on the same project as the key.
+- If key restrictions are enabled, prefer **no application restriction** for GitHub-hosted runners (their IPs are dynamic).
+- If you use API restrictions, include **YouTube Data API v3**.
+- Verify the secret value is the raw API key string (no quotes/spaces).
+
+The script now prints the exact YouTube API error reason in logs to help diagnose this.

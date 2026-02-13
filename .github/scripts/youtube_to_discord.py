@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -48,11 +49,41 @@ class Video:
     published: str
 
 
+def _format_youtube_api_error(err: urllib.error.HTTPError) -> str:
+    """Extract human-friendly reason from YouTube API error responses."""
+    try:
+        raw = err.read().decode("utf-8", errors="replace")
+        payload = json.loads(raw)
+        error_obj = payload.get("error", {}) if isinstance(payload, dict) else {}
+
+        message = error_obj.get("message") if isinstance(error_obj, dict) else None
+        details = error_obj.get("errors", []) if isinstance(error_obj, dict) else []
+        reason = None
+        if isinstance(details, list) and details:
+            first = details[0]
+            if isinstance(first, dict):
+                reason = first.get("reason")
+
+        if reason and message:
+            return f"YouTube API {err.code} ({reason}): {message}"
+        if message:
+            return f"YouTube API {err.code}: {message}"
+    except Exception:
+        pass
+
+    return f"HTTP Error {err.code}: {err.reason}"
+
+
 def _http_get_json(url: str) -> Dict:
-    """Fetch JSON from a URL and parse it."""
+    """Fetch JSON from a URL and parse it with clearer HTTP diagnostics."""
     req = urllib.request.Request(url, headers={"User-Agent": "youtube-discord-bot/1.0"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as err:
+        raise RuntimeError(_format_youtube_api_error(err)) from err
+    except urllib.error.URLError as err:
+        raise RuntimeError(f"Network error: {err}") from err
 
 
 
