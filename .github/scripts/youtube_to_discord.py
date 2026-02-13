@@ -221,7 +221,35 @@ def post_to_discord(webhook_url: str, channel_label: str, video: Video) -> None:
                 raise RuntimeError(f"Discord webhook failed with status {resp.status}")
     except urllib.error.HTTPError as err:
         body = err.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Discord webhook HTTP {err.code}: {body or err.reason}") from err
+        hint = ""
+        if "1010" in body:
+            hint = " (hint: Cloudflare/Discord blocked this request; verify webhook validity and network restrictions)"
+        raise RuntimeError(f"Discord webhook HTTP {err.code}: {body or err.reason}{hint}") from err
+    except urllib.error.URLError as err:
+        raise RuntimeError(f"Discord webhook network error: {err}") from err
+
+
+def post_test_message_to_discord(webhook_url: str, message: str) -> None:
+    """Send a manual webhook test message without calling YouTube APIs."""
+    payload = {"content": f"🧪 Webhook test from GitHub Actions\n{message}"}
+    req = urllib.request.Request(
+        webhook_url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            if resp.status >= 300:
+                raise RuntimeError(f"Discord webhook test failed with status {resp.status}")
+    except urllib.error.HTTPError as err:
+        body = err.read().decode("utf-8", errors="replace")
+        hint = ""
+        if "1010" in body:
+            hint = " (hint: Cloudflare/Discord blocked this request; verify webhook validity and network restrictions)"
+        raise RuntimeError(f"Discord webhook test HTTP {err.code}: {body or err.reason}{hint}") from err
+    except urllib.error.URLError as err:
+        raise RuntimeError(f"Discord webhook test network error: {err}") from err
 
 
 def parse_args() -> argparse.Namespace:
@@ -229,6 +257,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--channel", choices=["all", *CHANNELS.keys()], default="all")
     parser.add_argument("--state-file", default=".github/data/last_seen.json")
     parser.add_argument("--force-latest", action="store_true")
+    parser.add_argument("--test-webhook", action="store_true", help="Only test Discord webhook and exit")
+    parser.add_argument(
+        "--test-message",
+        default="If you can read this, your Discord webhook works ✅",
+        help="Message used with --test-webhook",
+    )
     return parser.parse_args()
 
 
@@ -242,6 +276,15 @@ def main() -> int:
     if "discord.com/api/webhooks" not in webhook_url and "discordapp.com/api/webhooks" not in webhook_url:
         print("ERROR: DISCORD_WEBHOOK_URL does not look like a Discord webhook URL", file=sys.stderr)
         return 2
+
+    if args.test_webhook:
+        try:
+            post_test_message_to_discord(webhook_url, args.test_message)
+            print("Webhook test sent successfully.")
+            return 0
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
 
     youtube_api_key = (
         os.environ.get("YOUTUBE_API_KEY", "").strip()

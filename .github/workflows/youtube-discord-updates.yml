@@ -5,8 +5,16 @@ on:
     - cron: '0 */2 * * *'
   workflow_dispatch:
     inputs:
+      run_mode:
+        description: 'Run mode'
+        required: true
+        type: choice
+        default: sync
+        options:
+          - sync
+          - webhook_test
       channel:
-        description: 'Which YouTube channel should be checked?'
+        description: 'Which YouTube channel should be checked? (sync mode)'
         required: true
         type: choice
         default: all
@@ -15,10 +23,15 @@ on:
           - hashtag_united
           - hashtag_united_extra
       force_latest:
-        description: 'Force-post the latest video (useful for manual testing)'
+        description: 'Force-post the latest video (sync mode)'
         required: true
         type: boolean
         default: false
+      webhook_test_message:
+        description: 'Optional custom message for webhook_test mode'
+        required: false
+        type: string
+        default: 'Manual webhook test from GitHub Actions'
 
 permissions:
   contents: write
@@ -50,18 +63,28 @@ jobs:
           Youtube_Hashtag_United_API: ${{ secrets.Youtube_Hashtag_United_API }}
           HASHTAG_UNITED_CHANNEL_ID: ${{ secrets.HASHTAG_UNITED_CHANNEL_ID }}
           HASHTAG_UNITED_EXTRA_CHANNEL_ID: ${{ secrets.HASHTAG_UNITED_EXTRA_CHANNEL_ID }}
+          INPUT_RUN_MODE: ${{ github.event.inputs.run_mode }}
           INPUT_CHANNEL: ${{ github.event.inputs.channel }}
           INPUT_FORCE_LATEST: ${{ github.event.inputs.force_latest }}
+          INPUT_WEBHOOK_TEST_MESSAGE: ${{ github.event.inputs.webhook_test_message }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
           CHANNEL="all"
-          FORCE_FLAG=""
 
-          # For manual runs we honor user-selected options from workflow_dispatch.
           if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$INPUT_CHANNEL" ]; then
             CHANNEL="$INPUT_CHANNEL"
           fi
 
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_RUN_MODE" = "webhook_test" ]; then
+            python .github/scripts/youtube_to_discord.py \
+              --test-webhook \
+              --test-message "$INPUT_WEBHOOK_TEST_MESSAGE" \
+              --channel "$CHANNEL" \
+              --state-file .github/data/last_seen.json
+            exit $?
+          fi
+
+          FORCE_FLAG=""
           if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_FORCE_LATEST" = "true" ]; then
             FORCE_FLAG="--force-latest"
           fi
@@ -72,7 +95,15 @@ jobs:
             $FORCE_FLAG
 
       - name: Commit updated state
+        env:
+          INPUT_RUN_MODE: ${{ github.event.inputs.run_mode }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_RUN_MODE" = "webhook_test" ]; then
+            echo "Webhook test mode - skipping state commit"
+            exit 0
+          fi
+
           if git diff --quiet -- .github/data/last_seen.json; then
             echo "No state changes to commit"
             exit 0

@@ -59,10 +59,14 @@ Then store:
 
 In **Actions → YouTube to Discord Updates → Run workflow**, choose:
 
-- `channel`: `all`, `hashtag_united`, or `hashtag_united_extra`
+- `run_mode`:
+  - `sync`: normal YouTube-to-Discord sync
+  - `webhook_test`: sends a standalone test message to Discord (does not call YouTube API)
+- `channel`: `all`, `hashtag_united`, or `hashtag_united_extra` (sync mode)
 - `force_latest`:
   - `false`: only genuinely new uploads
   - `true`: always post current latest upload (manual verification)
+- `webhook_test_message`: optional text used in webhook test mode
 
 ## Files
 
@@ -93,3 +97,5 @@ Check the Google Cloud API key settings:
 The script now prints the exact YouTube API error reason in logs to help diagnose this.
 
 - If error mentions `Discord webhook HTTP 401/403/404`, the webhook URL/permissions are invalid; recreate webhook in the target Discord channel and update `DISCORD_WEBHOOK_URL`.
+
+- If error contains `error code: 1010`, the webhook request is being blocked upstream; regenerate the webhook, verify the exact URL in `DISCORD_WEBHOOK_URL`, and retry with `run_mode=webhook_test` to isolate Discord from YouTube.
