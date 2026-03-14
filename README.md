@@ -17,7 +17,7 @@ To make the automation stable, this implementation uses the **official YouTube D
 
 - A scheduled GitHub Actions workflow runs every 2 hours.
 - The script calls YouTube Data API and uses built-in channel IDs by default (with optional secret-based overrides).
-- It compares latest video IDs against `.github/data/last_seen.json` to avoid duplicate Discord posts.
+- It compares latest video IDs against `.github/data/last_seen.json` and a posted history file to avoid duplicate Discord posts.
 - If there are new videos, it posts them to Discord in chronological order.
 
 > On first run, state is initialized and historical videos are not posted by default.
@@ -72,7 +72,8 @@ In **Actions → YouTube to Discord Updates → Run workflow**, choose:
 
 - `.github/workflows/youtube-discord-updates.yml`: workflow
 - `.github/scripts/youtube_to_discord.py`: main sync script
-- `.github/data/last_seen.json`: state storage
+- `.github/data/last_seen.json`: latest-seen state
+- `.github/data/posted_history.json`: persistent posted video ID history (duplicate protection)
 
 
 ## Built-in default channel IDs

@@ -179,6 +179,34 @@ def save_state(path: Path, state: Dict[str, str]) -> None:
     path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+
+
+def load_posted_history(path: Path) -> Dict[str, List[str]]:
+    """Load posted video history map from JSON; return empty map when missing."""
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return {}
+    result: Dict[str, List[str]] = {}
+    for key, value in data.items():
+        if isinstance(key, str) and isinstance(value, list):
+            result[key] = [v for v in value if isinstance(v, str)]
+    return result
+
+
+def save_posted_history(path: Path, history: Dict[str, List[str]]) -> None:
+    """Persist posted video history in stable JSON format."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(history, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def filter_already_posted(channel_key: str, videos: List[Video], history: Dict[str, List[str]]) -> List[Video]:
+    """Remove videos already posted previously for this channel."""
+    posted_ids = set(history.get(channel_key, []))
+    return [video for video in videos if video.video_id not in posted_ids]
+
+
 def should_post_videos(videos: List[Video], last_seen_video_id: str | None, force_latest: bool) -> List[Video]:
     """Return videos to post based on state and mode."""
     if not videos:
@@ -269,6 +297,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Post new YouTube uploads to Discord")
     parser.add_argument("--channel", choices=["all", *CHANNELS.keys()], default="all")
     parser.add_argument("--state-file", default=".github/data/last_seen.json")
+    parser.add_argument("--history-file", default=".github/data/posted_history.json")
     parser.add_argument("--force-latest", action="store_true")
     parser.add_argument("--test-webhook", action="store_true", help="Only test Discord webhook and exit")
     parser.add_argument(
@@ -308,7 +337,9 @@ def main() -> int:
         return 2
 
     state_file = Path(args.state_file)
+    history_file = Path(args.history_file)
     state = load_state(state_file)
+    posted_history = load_posted_history(history_file)
 
     selected_keys = list(CHANNELS.keys()) if args.channel == "all" else [args.channel]
     state_changed = False
@@ -348,6 +379,7 @@ def main() -> int:
 
             last_seen = state.get(channel_key)
             videos_to_post = should_post_videos(videos, last_seen, args.force_latest)
+            videos_to_post = filter_already_posted(channel_key, videos_to_post, posted_history)
 
             # Post first. We only update state after successful posting to avoid
             # losing notifications when Discord webhook calls fail.
@@ -355,6 +387,14 @@ def main() -> int:
                 post_to_discord(webhook_url, cfg["label"], video)
                 posted_count += 1
                 print(f"  Posted: {video.video_id} - {video.title}")
+
+                # Mark video as posted to prevent duplicates across future runs.
+                existing = posted_history.get(channel_key, [])
+                if video.video_id not in existing:
+                    existing.append(video.video_id)
+                    # Keep history bounded to avoid unlimited file growth.
+                    posted_history[channel_key] = existing[-200:]
+                    state_changed = True
 
             if not last_seen and not videos_to_post:
                 # First non-forced run bootstrap: track current latest so future runs
@@ -374,6 +414,7 @@ def main() -> int:
 
     if state_changed:
         save_state(state_file, state)
+        save_posted_history(history_file, posted_history)
 
     if channel_errors and posted_count == 0:
         print("Failed to process all selected channels.", file=sys.stderr)

@@ -55,6 +55,9 @@ jobs:
           if [ ! -f .github/data/last_seen.json ]; then
             echo '{}' > .github/data/last_seen.json
           fi
+          if [ ! -f .github/data/posted_history.json ]; then
+            echo '{}' > .github/data/posted_history.json
+          fi
 
       - name: Run YouTube -> Discord sync
         env:
@@ -80,7 +83,8 @@ jobs:
               --test-webhook \
               --test-message "$INPUT_WEBHOOK_TEST_MESSAGE" \
               --channel "$CHANNEL" \
-              --state-file .github/data/last_seen.json
+              --state-file .github/data/last_seen.json \
+              --history-file .github/data/posted_history.json
             exit $?
           fi
 
@@ -92,6 +96,7 @@ jobs:
           python .github/scripts/youtube_to_discord.py \
             --channel "$CHANNEL" \
             --state-file .github/data/last_seen.json \
+            --history-file .github/data/posted_history.json \
             $FORCE_FLAG
 
       - name: Commit updated state
@@ -104,13 +109,13 @@ jobs:
             exit 0
           fi
 
-          if git diff --quiet -- .github/data/last_seen.json; then
+          if git diff --quiet -- .github/data/last_seen.json .github/data/posted_history.json; then
             echo "No state changes to commit"
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/data/last_seen.json
+          git add .github/data/last_seen.json .github/data/posted_history.json
           git commit -m "chore: update YouTube last-seen state"
           git push
